@@ -1,1 +1,1 @@
-# solidity-samrtContracts
+# solidity-smartContracts
