@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.17;
+
+error TxNotExists(uint transactionIndex);
+error TxAlreadyApproved(uint transactionIndex);
+error TxAlreadySent(uint transactionIndex);
+
+
+contract MultiSigWallet {
+    event Deposit(address indexed sender, uint256 amount, uint256 balance);
+    event CreateWithdrawTx(  address indexed owner,uint indexed transactionIndex,address indexed to,uint amount);
+    event ApproveWithdrawTx(address indexed owner, uint indexed transactionIndex);
+
+    address[] public owners;
+    WithdrawTx[] public withdrawTxstruct;
+    mapping(address => bool) public isOwner;
+    mapping(uint256 => mapping(address => bool)) isApproved;
+
+    uint256 public quoramRequired;
+
+    struct WithdrawTx{
+        address to;
+        uint256 amount;
+        uint256 approvals;
+        bool sent;
+  }
+
+    constructor(address[] memory _owners,uint256 _quoromRequired) {
+        require(_owners.length >= 1, "No owners");
+        require(_quoromRequired > 0 && _quoromRequired <= owners.length, "Quorom < 0");
+        for(uint256 i=0; i< _owners.length;i++){
+            address owner = _owners[i];
+
+            require(owner != address(0), "Invalid owner");
+            require(!isOwner[owner], "owner not unique");
+
+            isOwner[owner] = true;
+            owners.push(owner);
+        }
+        quoramRequired = _quoromRequired;
+
+    }
+
+    function createWithdrawTx(address _to,uint256 _amount) public onlyOwner{
+        uint256 txIndex = withdrawTxstruct.length;
+
+        withdrawTxstruct.push(WithdrawTx({to: _to,amount: _amount, approvals: 0, sent: false}));
+        emit CreateWithdrawTx(msg.sender, txIndex, _to, _amount); 
+    }
+
+    function approveWithdrawTx(uint256 txIndex) public onlyOwner transactionExists(txIndex) transactionApproved(txIndex) transactionNotSent(txIndex)  {
+        WithdrawTx storage withdrawTx = withdrawTxstruct[txIndex];
+
+        withdrawTx.approvals +=1;
+        isApproved[txIndex][msg.sender];
+        if( withdrawTx.approvals >= quoramRequired){
+             withdrawTx.sent = true;
+             (bool s,) =  withdrawTx.to.call{value: withdrawTx.amount}("");
+             require(s);
+        emit ApproveWithdrawTx(msg.sender,txIndex);
+        }
+
+    }
+
+        function deposit() public payable {
+        emit Deposit(msg.sender, msg.value, address(this).balance);
+    }
+
+        receive() external payable {
+        emit Deposit(msg.sender, msg.value, address(this).balance);
+    }
+
+    modifier onlyOwner() {
+        require(isOwner[msg.sender], "not owner");
+        _;
+    }
+
+    modifier transactionExists(uint _transactionIndex){
+        if(_transactionIndex > withdrawTxstruct.length){
+            revert TxNotExists(_transactionIndex);
+        }
+        _;
+    }
+
+    modifier transactionApproved(uint256 _transactionIndex){
+        if(isApproved[_transactionIndex][msg.sender]){
+            revert TxAlreadyApproved(_transactionIndex);
+        }
+        _;
+    }
+
+    modifier transactionNotSent(uint256 _transactionIndex){
+        if(withdrawTxstruct[_transactionIndex].sent){
+            revert TxAlreadySent(_transactionIndex);
+        }
+        _;
+    }
+}
