@@ -1,73 +1,133 @@
 // SPDX-License-Identifier: MIT
+/*
+    WARNING: Please note that this contract has not been audited and as such may not be feasible 
+    to deploy to the mainnet as is. The contract acts only as an example to showcase how to develop
+    smart contracts in Solidity. It may contain vulnerabilities that are unaccounted for and as such,
+    should not be used in real environment. Do your own diligence before deploying any smart contracts
+    to the blockchain because once deployed, you cannot modify the contract.
+*/
 pragma solidity ^0.8.17;
 
 error TxNotExists(uint transactionIndex);
 error TxAlreadyApproved(uint transactionIndex);
 error TxAlreadySent(uint transactionIndex);
 
-
-contract MultiSigWallet {
-    event Deposit(address indexed sender, uint256 amount, uint256 balance);
-    event CreateWithdrawTx(  address indexed owner,uint indexed transactionIndex,address indexed to,uint amount);
-    event ApproveWithdrawTx(address indexed owner, uint indexed transactionIndex);
+contract MultisigWallet {
+    event Deposit(address indexed sender, uint amount, uint balance);
+    event CreateWithdrawTx(
+        address indexed owner,
+        uint indexed transactionIndex,
+        address indexed to,
+        uint amount
+    );
+    event ApproveWithdrawTx(
+        address indexed owner,
+        uint indexed transactionIndex
+    );
 
     address[] public owners;
-    WithdrawTx[] public withdrawTxstruct;
+
     mapping(address => bool) public isOwner;
-    mapping(uint256 => mapping(address => bool)) isApproved;
+    uint public quorumRequired;
 
-    uint256 public quoramRequired;
-
-    struct WithdrawTx{
+    struct WithdrawTx {
         address to;
-        uint256 amount;
-        uint256 approvals;
+        uint amount;
+        uint approvals;
         bool sent;
-  }
+    }
 
-    constructor(address[] memory _owners,uint256 _quoromRequired) {
-        require(_owners.length >= 1, "No owners");
-        require(_quoromRequired > 0 && _quoromRequired <= owners.length, "Quorom < 0");
-        for(uint256 i=0; i< _owners.length;i++){
+    mapping(uint => mapping(address => bool)) public isApproved;
+
+    WithdrawTx[] public withdrawTxes;
+
+    constructor(address[] memory _owners, uint _quorumRequired) {
+        require(_owners.length > 0, "owners required");
+        require(
+            _quorumRequired > 0 && _quorumRequired <= _owners.length,
+            "invalid number of required quorum"
+        );
+        for (uint i = 0; i < _owners.length; i++) {
             address owner = _owners[i];
 
-            require(owner != address(0), "Invalid owner");
+            require(owner != address(0), "invalid owner");
             require(!isOwner[owner], "owner not unique");
 
             isOwner[owner] = true;
             owners.push(owner);
         }
-        quoramRequired = _quoromRequired;
-
+        quorumRequired = _quorumRequired;
     }
 
-    function createWithdrawTx(address _to,uint256 _amount) public onlyOwner{
-        uint256 txIndex = withdrawTxstruct.length;
+    function createWithdrawTx(address _to, uint _amount) public onlyOwner {
+        uint transactionIndex = withdrawTxes.length;
 
-        withdrawTxstruct.push(WithdrawTx({to: _to,amount: _amount, approvals: 0, sent: false}));
-        emit CreateWithdrawTx(msg.sender, txIndex, _to, _amount); 
+        withdrawTxes.push(
+            WithdrawTx({to: _to, amount: _amount, approvals: 0, sent: false})
+        );
+        emit CreateWithdrawTx(msg.sender, transactionIndex, _to, _amount);
     }
 
-    function approveWithdrawTx(uint256 txIndex) public onlyOwner transactionExists(txIndex) transactionApproved(txIndex) transactionNotSent(txIndex)  {
-        WithdrawTx storage withdrawTx = withdrawTxstruct[txIndex];
+    function approveWithdrawTx(uint _transactionIndex)
+        public
+        onlyOwner
+        transactionExists(_transactionIndex)
+        transactionNotApproved(_transactionIndex)
+        transactionNotSent(_transactionIndex)
+    {
+        WithdrawTx storage withdrawTx = withdrawTxes[_transactionIndex];
+        withdrawTx.approvals += 1;
+        isApproved[_transactionIndex][msg.sender] = true;
 
-        withdrawTx.approvals +=1;
-        isApproved[txIndex][msg.sender];
-        if( withdrawTx.approvals >= quoramRequired){
-             withdrawTx.sent = true;
-             (bool s,) =  withdrawTx.to.call{value: withdrawTx.amount}("");
-             require(s);
-        emit ApproveWithdrawTx(msg.sender,txIndex);
+        if (withdrawTx.approvals >= quorumRequired) {
+            withdrawTx.sent = true;
+            (bool success, ) = withdrawTx.to.call{value: withdrawTx.amount}("");
+            require(success, "transaction failed");
+            emit ApproveWithdrawTx(msg.sender, _transactionIndex);
         }
-
     }
 
-        function deposit() public payable {
+    function getOwners() external view returns (address[] memory) {
+        return owners;
+    }
+
+    function getWithdrawTxCount() public view returns (uint) {
+        return withdrawTxes.length;
+    }
+
+    function getWithdrawTxes() public view returns (WithdrawTx[] memory) {
+        return withdrawTxes;
+    }
+
+    function getWithdrawTx(uint _transactionIndex)
+        public
+        view
+        returns (
+            address to,
+            uint amount,
+            uint approvals,
+            bool sent
+        )
+    {
+        WithdrawTx storage withdrawTx = withdrawTxes[_transactionIndex];
+        return (
+            withdrawTx.to,
+            withdrawTx.amount,
+            withdrawTx.approvals,
+            withdrawTx.sent
+        );
+    }
+
+    function deposit() public payable {
         emit Deposit(msg.sender, msg.value, address(this).balance);
     }
 
-        receive() external payable {
+    receive() external payable {
         emit Deposit(msg.sender, msg.value, address(this).balance);
+    }
+
+    function balanceOf() public view returns (uint) {
+        return address(this).balance;
     }
 
     modifier onlyOwner() {
@@ -75,22 +135,22 @@ contract MultiSigWallet {
         _;
     }
 
-    modifier transactionExists(uint _transactionIndex){
-        if(_transactionIndex > withdrawTxstruct.length){
+    modifier transactionExists(uint _transactionIndex) {
+        if (_transactionIndex > withdrawTxes.length) {
             revert TxNotExists(_transactionIndex);
         }
         _;
     }
 
-    modifier transactionApproved(uint256 _transactionIndex){
-        if(isApproved[_transactionIndex][msg.sender]){
+    modifier transactionNotApproved(uint _transactionIndex) {
+        if (isApproved[_transactionIndex][msg.sender]) {
             revert TxAlreadyApproved(_transactionIndex);
         }
         _;
     }
 
-    modifier transactionNotSent(uint256 _transactionIndex){
-        if(withdrawTxstruct[_transactionIndex].sent){
+    modifier transactionNotSent(uint _transactionIndex) {
+        if (withdrawTxes[_transactionIndex].sent) {
             revert TxAlreadySent(_transactionIndex);
         }
         _;
